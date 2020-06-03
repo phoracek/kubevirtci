@@ -32,6 +32,24 @@ function ensure_cr {
   done
 }
 
+function ensure_caBundle {
+  webhook_configuration_type=$1
+  webhook_configuration=$2
+  hash=$3
+
+  intervals=6
+  timeout=10
+
+  count=0
+  current_cab=$(_kubectl get $webhook_configuration_type $webhook_configuration -ocustom-columns=CAB:.webhooks[*].clientConfig.caBundle --no-headers)
+  target_cab=$hash
+  until [[ $current_cab == $target_cab ]] ; do
+      ((count++)) && ((count == intervals)) && echo "$webhook_configuration_type caBundle did not changed" && exit 1
+      echo "[$count/$intervals] Waiting for $webhook_configuration_type-$webhook_configuration caBundle update.."
+      sleep $timeout
+  done
+}
+
 # not using kubectl wait since with the sriov operator the pods get restarted a couple of times and this is
 # more reliable
 function wait_pods_ready {
@@ -139,8 +157,10 @@ _kubectl patch validatingwebhookconfiguration operator-webhook-config --patch '{
 _kubectl patch mutatingwebhookconfiguration network-resources-injector-config --patch '{"webhooks":[{"name":"network-resources-injector-config.k8s.io", "clientConfig": { "caBundle": "'"$(cat $CSRCREATORPATH/network-resources-injector.cert)"'" }}]}'
 _kubectl patch mutatingwebhookconfiguration operator-webhook-config --patch '{"webhooks":[{"name":"operator-webhook.sriovnetwork.openshift.io", "clientConfig": { "caBundle": "'"$(cat $CSRCREATORPATH/operator-webhook.cert)"'" }}]}'
 
-# we need to sleep to wait for the configuration above the be picked up
-sleep 60
+# Ensure caBundle is configured with new certificates
+ensure_caBundle "validatingwebhookconfiguration" "operator-webhook-config"           "$(cat $CSRCREATORPATH/operator-webhook.cert)"
+ensure_caBundle "mutatingwebhookconfiguration"   "operator-webhook-config"           "$(cat $CSRCREATORPATH/operator-webhook.cert)"
+ensure_caBundle "mutatingwebhookconfiguration"   "network-resources-injector-config" "$(cat $CSRCREATORPATH/network-resources-injector.cert)"
 
 # Substitute NODE_PF and NODE_PF_NUM_VFS then create SriovNetworkNodePolicy CR
 envsubst < $MANIFESTS_DIR/network_config_policy.yaml | _kubectl create -f -
