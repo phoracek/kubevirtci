@@ -171,5 +171,9 @@ sriov_operator_namespace="sriov-network-operator"
 policy_name=$(cat $MANIFESTS_DIR/network_config_policy.yaml | grep 'name:' | awk '{print $2}')
 ensure_cr "SriovNetworkNodePolicy" $policy_name $sriov_operator_namespace
 
+# Wait for cni and device-plugin pods to be ready
+_kubectl wait pods -n $sriov_operator_namespace -l app=sriov-cni           --for condition=Ready --timeout 300s
+_kubectl wait pods -n $sriov_operator_namespace -l app=sriov-device-plugin --for condition=Ready --timeout 300s
+
 
 ${SRIOV_NODE_CMD} chmod 666 /dev/vfio/vfio
