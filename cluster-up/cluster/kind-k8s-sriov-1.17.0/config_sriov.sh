@@ -12,6 +12,26 @@ WORKER_NODE_ROOT="${CLUSTER_NAME}-worker"
 
 OPERATOR_GIT_HASH=8d3c30de8ec5a9a0c9eeb84ea0aa16ba2395cd68  # release-4.4
 
+function ensure_cr {
+  crd=$1
+  cr=$2
+  namespace=$3
+
+  intervals=30
+  timeout=3
+
+  if [[ $namespace != "" ]];then
+    namespace="-n $namespace"
+  fi
+
+  count=0
+  until _kubectl get $crd $cr $namespace; do
+      ((count++)) && ((count == intervals)) && echo "$crd CR not found" && exit 1
+      echo "[$count/$intervals] Waiting for $crd CR.."
+      sleep $timeout
+  done
+}
+
 # not using kubectl wait since with the sriov operator the pods get restarted a couple of times and this is
 # more reliable
 function wait_pods_ready {
@@ -110,8 +130,10 @@ _kubectl label node $SRIOV_NODE sriov=true
 
 wait_pods_ready
 
-# we need to sleep as the configurations below need to appear
-sleep 30
+# Ensure webook-configuration object created
+ensure_cr "validatingwebhookconfiguration" "operator-webhook-config"
+ensure_cr "mutatingwebhookconfiguration"   "operator-webhook-config"
+ensure_cr "mutatingwebhookconfiguration"   "network-resources-injector-config"
 
 _kubectl patch validatingwebhookconfiguration operator-webhook-config --patch '{"webhooks":[{"name":"operator-webhook.sriovnetwork.openshift.io", "clientConfig": { "caBundle": "'"$(cat $CSRCREATORPATH/operator-webhook.cert)"'" }}]}'
 _kubectl patch mutatingwebhookconfiguration network-resources-injector-config --patch '{"webhooks":[{"name":"network-resources-injector-config.k8s.io", "clientConfig": { "caBundle": "'"$(cat $CSRCREATORPATH/network-resources-injector.cert)"'" }}]}'
@@ -120,8 +142,14 @@ _kubectl patch mutatingwebhookconfiguration operator-webhook-config --patch '{"w
 # we need to sleep to wait for the configuration above the be picked up
 sleep 60
 
+# Substitute NODE_PF and NODE_PF_NUM_VFS then create SriovNetworkNodePolicy CR
 envsubst < $MANIFESTS_DIR/network_config_policy.yaml | _kubectl create -f -
+
+sriov_operator_namespace="sriov-network-operator"
+
+# Ensure SriovNetworkNodePolicy CR is created
+policy_name=$(cat $MANIFESTS_DIR/network_config_policy.yaml | grep 'name:' | awk '{print $2}')
+ensure_cr "SriovNetworkNodePolicy" $policy_name $sriov_operator_namespace
 
 
 ${SRIOV_NODE_CMD} chmod 666 /dev/vfio/vfio
-
