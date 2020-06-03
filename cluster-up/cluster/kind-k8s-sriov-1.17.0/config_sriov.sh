@@ -49,6 +49,20 @@ function ensure_caBundle {
       sleep $timeout
   done
 }
+function wait_for_taint {
+  taint=$1
+
+  intervals=30
+  timeout=10
+
+  count=0
+  until [[ $(_kubectl  get nodes -ocustom-columns=taints:.spec.taints[*].effect --no-headers | grep -i $taint) != "" ]]; do
+    ((count++)) && ((count == intervals)) && echo "Taint $taint did not removed in after $intervals tries" && exit 1
+    echo "[$count/$intervals] Waiting for taint $taint absence"
+    _kubectl get nodes -ocustom-columns=NAME:.metadata.name,TAINTS:.spec.taints[*].effect --no-headers
+    sleep $timeout
+  done
+}
 
 function wait_for_taint_absence {
   taint=$1
@@ -176,6 +190,11 @@ _kubectl patch mutatingwebhookconfiguration operator-webhook-config --patch '{"w
 ensure_caBundle "validatingwebhookconfiguration" "operator-webhook-config"           "$(cat $CSRCREATORPATH/operator-webhook.cert)"
 ensure_caBundle "mutatingwebhookconfiguration"   "operator-webhook-config"           "$(cat $CSRCREATORPATH/operator-webhook.cert)"
 ensure_caBundle "mutatingwebhookconfiguration"   "network-resources-injector-config" "$(cat $CSRCREATORPATH/network-resources-injector.cert)"
+
+# Wait caBundle reconcile to finish by waiting for the "NoSchedule" taint
+# to present and then absent.
+wait_for_taint "NoSchedule"
+wait_for_taint_absence "NoSchedule"
 
 # Substitute NODE_PF and NODE_PF_NUM_VFS then create SriovNetworkNodePolicy CR
 envsubst < $MANIFESTS_DIR/network_config_policy.yaml | _kubectl create -f -
